@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "@types/node": "^18.13.0",
+    "typescript": "^5.0.0-beta"
+  },
+  "scripts": {
+    "prestart": "npx tsc",
+    "start": "node build/main.js"
+  }
+}
