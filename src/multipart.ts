@@ -1,15 +1,15 @@
-import { File, readFile } from "./file";
-import { Model, ModelReference, getAbsoluteModel, mergeModels, stripModelName } from "./model";
+import { File } from "./file";
+import { Model, ModelReference, mergeModels, applyReferenceRotation, ModelStorage } from './model';
 import { Variants } from "./variants";
 
-type Case = {[key: string]: string};
+type Case = { [key: string]: string; };
 
 export type Multipart = {
     multipart: {
         when?: Case | {
-            OR: Case[]
+            OR: Case[];
         },
-        apply: ModelReference | ModelReference[]
+        apply: ModelReference | ModelReference[];
     }[],
 };
 
@@ -30,10 +30,10 @@ function caseToVariant(combination: Case) {
 }
 
 
-export function convertMultipartToVariant(blockstate: File<Multipart>, models: Map<string, File<Model>>) {
+export function convertMultipartToVariant(blockstate: File<Multipart>, models: ModelStorage) {
     const multipart = blockstate.data;
     const parts = multipart.multipart;
-    
+
     const conditions = new Map<string, Set<string>>();
     parts.forEach(part => {
         if (!part.when)
@@ -46,10 +46,13 @@ export function convertMultipartToVariant(blockstate: File<Multipart>, models: M
                     conditions.set(key, new Set());
                 }
                 const value = cas[key];
-                conditions.get(key)?.add(value);
                 if (value === "true") {
                     conditions.get(key)?.add("false");
                 }
+                if (!isNaN(parseInt(value))) {
+                    conditions.get(key)?.add("0");
+                }
+                conditions.get(key)?.add(value);
             }
         });
     });
@@ -64,10 +67,10 @@ export function convertMultipartToVariant(blockstate: File<Multipart>, models: M
 
     const combinations = [];
     while (counter < combinationCount) {
-        let copy = counter; 
-        const combination: {[key: string]: string} = {};
+        let copy = counter;
+        const combination: { [key: string]: string; } = {};
         conditionEntries.forEach(([key, values]) => {
-            combination[key] = values[copy % values.length]; 
+            combination[key] = values[copy % values.length];
             copy = Math.floor(copy / values.length);
         });
         combinations.push(combination);
@@ -78,7 +81,7 @@ export function convertMultipartToVariant(blockstate: File<Multipart>, models: M
     const variants: File<Variants> = {
         name: blockstate.name,
         data: {
-            variants: {}, 
+            variants: {},
         },
     };
 
@@ -110,17 +113,18 @@ export function convertMultipartToVariant(blockstate: File<Multipart>, models: M
                 usedModels.push(part.apply);
             }
         });
-
+        
         const variantKey = caseToVariant(combination);
         if (!generatedReferences.has(key)) {
-            const mergedModel = mergeModels(usedModels.map(reference => {
-                const name = stripModelName(reference.model);
-                return getAbsoluteModel(readFile<Model>(`data/models/block/${name}.json`, name).data, models);
-            }));
+            const mergedModel = mergeModels(
+                usedModels
+                    .map(reference => applyReferenceRotation(reference, models))
+            );
+
             const name = `${blockstate.name}_generated_model_${generatedReferences.size}`;
-            models.set(name, {name, data: mergedModel});
-            generatedReferences.set(key, {model: name});
-        } 
+            models.set(name, { name, data: mergedModel });
+            generatedReferences.set(key, { model: "minecraft:block/" + name });
+        }
         variants.data.variants[variantKey] = generatedReferences.get(key)!;
     });
 

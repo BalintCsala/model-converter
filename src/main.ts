@@ -1,24 +1,46 @@
 import fs from "fs";
 import { convertMultipartToVariant, Multipart } from "./multipart";
-import { Model } from "./model";
+import { Model, simplifyModel } from './model';
 import { File, readFile } from "./file";
+import { applyReferences, Variants } from './variants';
 
 const models = new Map<string, File<Model>>();
+const generatedModels = new Map<string, File<Model>>();
 
 fs.readdirSync("data/models/block")
     .forEach(file => models.set(file.replace(".json", ""), readFile<Model>(`data/models/block/${file}`, file.replace(".json", ""))));
 
-const testFile = {
-    name: "oak_fence",
-    data: JSON.parse(fs.readFileSync("data/blockstates/oak_fence.json").toString()) as Multipart,
-};
+let variants = fs.readdirSync("data/blockstates")
+    .map(file => ({ name: file.replace(".json", ""), data: JSON.parse(fs.readFileSync(`data/blockstates/${file}`, "utf-8")) }))
+    .map(file => {
+        if (file.data.multipart)
+            return convertMultipartToVariant(file as File<Multipart>, models);
 
-const variantFile = convertMultipartToVariant(testFile, models);
+        return file as File<Variants>;
+    });
 
-fs.mkdirSync("output/assets/minecraft/models/block", {recursive: true});
-fs.mkdirSync("output/assets/minecraft/blockstates", {recursive: true});
-[...models.values()].forEach(model => {
-    fs.writeFileSync(`output/assets/minecraft/models/block/${model.name}.json`, JSON.stringify(model.data, null, 4));
+variants.forEach(variantFile => applyReferences(variantFile, models, generatedModels));
+
+variants = variants.filter(variants => Object.keys(variants.data.variants).length > 0);
+
+fs.mkdirSync("output/assets/minecraft/models/block", { recursive: true });
+fs.mkdirSync("output/assets/minecraft/blockstates", { recursive: true });
+
+fs.writeFileSync("output/pack.mcmeta", JSON.stringify({
+    pack: {
+        pack_format: 9,
+        description: "Base shader",
+    },
+}));
+
+const newModels = [...generatedModels.values()];
+newModels
+    .forEach(model => simplifyModel(model.data));
+newModels
+    .forEach(model => {
+        fs.writeFileSync(`output/assets/minecraft/models/block/${model.name}.json`, JSON.stringify(model.data));
+    });
+
+variants.forEach(variantFile => {
+    fs.writeFileSync(`output/assets/minecraft/blockstates/${variantFile.name}.json`, JSON.stringify(variantFile.data));
 });
-
-fs.writeFileSync(`output/assets/minecraft/blockstates/${variantFile.name}.json`, JSON.stringify(variantFile.data, null, 4));
