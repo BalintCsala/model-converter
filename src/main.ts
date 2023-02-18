@@ -3,6 +3,7 @@ import { convertMultipartToVariant, Multipart } from "./multipart";
 import { Model, simplifyModel } from './model';
 import { File, readFile } from "./file";
 import { applyReferences, Variants } from './variants';
+import { Atlas } from './atlas';
 
 const models = new Map<string, File<Model>>();
 const generatedModels = new Map<string, File<Model>>();
@@ -39,6 +40,15 @@ newModels
 newModels
     .forEach(model => {
         fs.writeFileSync(`output/assets/minecraft/models/block/${model.name}.json`, JSON.stringify(model.data));
+    });
+
+
+const atlas = new Atlas();
+fs.readdirSync("data/textures/block")
+    .filter(file => file.endsWith("png") && !file.endsWith("_n.png") && !file.endsWith("_s.png"))
+    .forEach(file => {
+        const name = file.replace(".png", "");
+        atlas.addImage(name);
     });
 
 variants.forEach(variantFile => {

@@ -313,7 +313,7 @@ export function applyReferenceRotation(reference: ModelReference, models: Map<st
                 face.cullface = yFaceMapping[xFaceMapping[face.cullface] as Face] as Face;
             }
 
-            if (face.uv) {
+            if (reference.uvlock && face.uv) {
                 if (key === Face.up || key === Face.down) {
                     face.uv = yUVRotator(face.uv);
                 } else if (key === Face.east || key === Face.west) {
