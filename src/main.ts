@@ -1,9 +1,10 @@
 import fs from "fs";
 import { convertMultipartToVariant, Multipart } from "./multipart";
-import { Model, simplifyModel } from './model';
+import { Model, simplifyModel, encodeModel } from './model';
 import { File, readFile } from "./file";
 import { applyReferences, Variants } from './variants';
 import { Atlas } from './atlas';
+import { ImageData, encode } from "fast-png";
 
 const models = new Map<string, File<Model>>();
 const generatedModels = new Map<string, File<Model>>();
@@ -37,20 +38,39 @@ fs.writeFileSync("output/pack.mcmeta", JSON.stringify({
 const newModels = [...generatedModels.values()];
 newModels
     .forEach(model => simplifyModel(model.data));
-newModels
+
+/*newModels
     .forEach(model => {
         fs.writeFileSync(`output/assets/minecraft/models/block/${model.name}.json`, JSON.stringify(model.data));
     });
 
-
-const atlas = new Atlas();
-fs.readdirSync("data/textures/block")
-    .filter(file => file.endsWith("png") && !file.endsWith("_n.png") && !file.endsWith("_s.png"))
-    .forEach(file => {
-        const name = file.replace(".png", "");
-        atlas.addImage(name);
-    });
-
 variants.forEach(variantFile => {
     fs.writeFileSync(`output/assets/minecraft/blockstates/${variantFile.name}.json`, JSON.stringify(variantFile.data));
-});
+});*/
+
+(async () => {
+    const atlas = new Atlas();
+    await Promise.all(fs.readdirSync("data/textures/block")
+        .filter(file => file.endsWith("png") && !file.endsWith("_n.png") && !file.endsWith("_s.png"))
+        .map(async file => {
+            const name = file.replace(".png", "");
+            await atlas.addTexture(name);
+        }));
+        
+    atlas.generateLocations();
+    const canvas = atlas.generateAtlas();
+    const buffer = canvas.toBuffer("image/png");
+    fs.writeFileSync("./output/atlas.png", buffer);
+    
+    const rows = newModels.map(model => encodeModel(model.data, atlas));
+    const maxRowLength = Math.max(...rows.map(row => row.length));
+    const data = rows.map(row => [...row, ...new Array(maxRowLength - row.length).fill(0)]).flat();
+    const png: ImageData = {
+        width: maxRowLength / 4,
+        height: rows.length,
+        data: new Uint8Array(data),
+        channels: 4,
+        depth: 8,
+    };
+    fs.writeFileSync("./output/model_data.png", encode(png));
+})();

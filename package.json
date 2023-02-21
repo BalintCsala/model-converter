@@ -2,6 +2,7 @@
   "dependencies": {
     "@types/node": "^18.13.0",
     "canvas": "^2.11.0",
+    "fast-png": "^6.1.0",
     "typescript": "^5.0.0-beta"
   },
   "scripts": {

@@ -1,4 +1,5 @@
 import { File } from "./file";
+import { Atlas, encodeLocation } from './atlas';
 
 export enum Rotation {
     Deg0 = 0,
@@ -57,6 +58,24 @@ export type Model = {
     textures: { [key: string]: string; },
     elements?: Element[],
 };
+
+export function encodeModel(model: Model, atlas: Atlas) {
+    if (!model.elements)
+        return [0, 0, 0, 0];
+
+    const faceCount = model.elements.reduce((count, element) => count + Object.keys(element.faces).length, 0);
+
+    return [0, 0, (faceCount >> 8) & 0xFF, faceCount & 0xFF, ...model.elements.map(element => {
+        return Object.keys(element.faces).map(face => {
+            const faceData = element.faces[face as Face];
+            const textureLocation = atlas.locations.get(model.textures[faceData.texture.replace(/^#/, "")].replace(/(minecraft:)?(block\/)?/, ""))!;
+            
+            return [
+                ...encodeLocation(textureLocation),
+            ]; 
+        }).flat();
+    }).flat()];
+}
 
 export type ModelStorage = Map<string, File<Model>>;
 
@@ -328,7 +347,7 @@ export function applyReferenceRotation(reference: ModelReference, models: Map<st
             if (rotated.rotation.origin) {
                 rotated.rotation.origin = yOriginRotator(xOriginRotator(rotated.rotation.origin));
             }
-            
+
             if (reference.x === 90 || reference.x === 180) {
                 rotated.rotation.angle *= -1;
             }
@@ -389,8 +408,8 @@ export function mergeModels(models: Model[]) {
 
 export function simplifyModel(model: Model) {
     delete model.parent;
-    
-    const newTextures: { [key: string]: string } = {};
+
+    const newTextures: { [key: string]: string; } = {};
     const mapping = new Map<string, string>();
     for (let key in model.textures) {
         let texturePath = model.textures[key];
@@ -406,11 +425,11 @@ export function simplifyModel(model: Model) {
         }
     }
     model.textures = newTextures;
-    
+
     model.elements?.forEach(element => {
         for (let key in element.faces) {
             const face = element.faces[key as Face];
             face.texture = "#" + mapping.get(face.texture.replace("#", ""))!;
-        }  
+        }
     });
 }
