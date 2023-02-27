@@ -1,6 +1,6 @@
 import fs from "fs";
 import { convertMultipartToVariant, Multipart } from "./multipart";
-import { Model, simplifyModel, encodeModel } from './model';
+import { Model, simplifyModel, encodeModel, disableShading, createDataTexture, Face } from "./model";
 import { File, readFile } from "./file";
 import { applyReferences, Variants } from './variants';
 import { Atlas } from './atlas';
@@ -27,6 +27,8 @@ variants = variants.filter(variants => Object.keys(variants.data.variants).lengt
 
 fs.mkdirSync("output/assets/minecraft/models/block", { recursive: true });
 fs.mkdirSync("output/assets/minecraft/blockstates", { recursive: true });
+fs.mkdirSync("output/assets/minecraft/textures/effect", { recursive: true });
+fs.mkdirSync("output/assets/minecraft/textures/block", { recursive: true });
 
 fs.writeFileSync("output/pack.mcmeta", JSON.stringify({
     pack: {
@@ -36,17 +38,13 @@ fs.writeFileSync("output/pack.mcmeta", JSON.stringify({
 }));
 
 const newModels = [...generatedModels.values()];
-newModels
-    .forEach(model => simplifyModel(model.data));
+newModels.forEach(model => simplifyModel(model.data));
 
-/*newModels
-    .forEach(model => {
-        fs.writeFileSync(`output/assets/minecraft/models/block/${model.name}.json`, JSON.stringify(model.data));
-    });
+newModels.forEach(model => disableShading(model.data));
 
 variants.forEach(variantFile => {
     fs.writeFileSync(`output/assets/minecraft/blockstates/${variantFile.name}.json`, JSON.stringify(variantFile.data));
-});*/
+});
 
 (async () => {
     const atlas = new Atlas();
@@ -56,12 +54,11 @@ variants.forEach(variantFile => {
             const name = file.replace(".png", "");
             await atlas.addTexture(name);
         }));
-        
+
     atlas.generateLocations();
-    const canvas = atlas.generateAtlas();
-    const buffer = canvas.toBuffer("image/png");
-    fs.writeFileSync("./output/atlas.png", buffer);
-    
+    const atlasData = atlas.generateAtlas();
+    fs.writeFileSync("./output/assets/minecraft/textures/effect/atlas_combined.png", atlasData);
+
     const rows = newModels.map(model => encodeModel(model.data, atlas));
     const maxRowLength = Math.max(...rows.map(row => row.length));
     const data = rows.map(row => [...row, ...new Array(maxRowLength - row.length).fill(0)]).flat();
@@ -72,5 +69,34 @@ variants.forEach(variantFile => {
         channels: 4,
         depth: 8,
     };
-    fs.writeFileSync("./output/model_data.png", encode(png));
+    fs.writeFileSync("./output/assets/minecraft/textures/effect/model_data.png", encode(png));
+
+    newModels.forEach((model, i) => {
+        model.data.textures["marker"] = `minecraft:block/${model.name}_data__`;
+        model.data.elements?.push(
+            {
+                from: [7, 7, 7],
+                to: [9, 9, 9],
+                faces: {
+                    [Face.up]: {
+                        texture: "#marker",
+                        uv: [2, 2, 4, 4],
+                        tintindex: 0,
+                    },
+                    [Face.down]: {
+                        texture: "#marker",
+                        uv: [2, 2, 4, 4],
+                        tintindex: 0,
+                    }
+                },
+                shade: false
+            });
+        fs.writeFileSync(`output/assets/minecraft/textures/block/${model.name}_data__.png`, createDataTexture(i));
+    });
+
+    newModels.forEach(model => {
+        fs.writeFileSync(`output/assets/minecraft/models/block/${model.name}.json`, JSON.stringify(model.data));
+    });
+    
+    fs.writeFileSync("idmap.txt", newModels.map((model, i) => `${model.name}: ${i}`).join(`\n`));
 })();

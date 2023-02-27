@@ -1,14 +1,17 @@
-import { loadImage, Image, createCanvas, Canvas } from "canvas";
+import { DecodedPng, decode, encode } from "fast-png";
+import fs from "fs";
 
 const MIN_TEXTURE_SIZE = 16;
 const MAX_ATLAS_SIZE = 32768;
 const GRID_WIDTH = MAX_ATLAS_SIZE / MIN_TEXTURE_SIZE;
 
+type Image = { width: number, height: number, data: Uint8Array; };
+
 type Texture = {
-    size: number,
     albedo: Image,
-    normal: Image | Canvas,
-    specular: Image | Canvas,
+    normal: Image,
+    specular: Image,
+    size: number,
 };
 
 type TextureLocation = {
@@ -18,7 +21,8 @@ type TextureLocation = {
 };
 
 export function encodeLocation(location: TextureLocation) {
-    let data = (Math.round(Math.log2(location.size / MIN_TEXTURE_SIZE)) << 20) | (location.x << 10) | location.y;
+    let data = (Math.round(Math.log2(location.size)) << 20) | (location.y << 10) | location.x;
+
     return [
         data & 0xFF,
         (data >> 8) & 0xFF,
@@ -26,15 +30,6 @@ export function encodeLocation(location: TextureLocation) {
         (data >> 24) & 0xFF,
     ];
 }
-
-function createPlaceholder(size: number, color: [number, number, number]) {
-    const canvas = createCanvas(size, size);
-    const context = canvas.getContext("2d");
-    context.fillStyle = `rgb(${color})`;
-    context.fillRect(0, 0, size, size);
-    return canvas;
-}
-
 export class Atlas {
 
     private textures = new Map<string, Texture>();
@@ -43,18 +38,55 @@ export class Atlas {
 
     public locations = new Map<string, TextureLocation>();
 
+    private static ensure4Channels(image: DecodedPng) {
+        if (image.channels === 4)
+            return image as Image;
+
+        return {
+            width: image.width,
+            height: image.height,
+            data: new Uint8Array(
+                new Array(image.width * image.height * 4).fill(0).map((_, i) => i % 4 === 3 ? 255 : image.data[Math.floor(i / 4) * 3 + i % 4])
+            )
+        };
+    }
+
     public async addTexture(name: string) {
         if (this.textures.has(name))
             return;
 
-        const albedo = await loadImage(`data/textures/block/${name}.png`);
-        const size = Math.min(albedo.width, albedo.height);
+        const albedo = Atlas.ensure4Channels(decode(fs.readFileSync(`data/textures/block/${name}.png`)));
 
+        let normalData;
+        try {
+            normalData = Atlas.ensure4Channels(decode(fs.readFileSync(`data/textures/block/${name}_n.png`)));
+        } catch (e) {
+            normalData = {
+                width: albedo.width,
+                height: albedo.height,
+                data: new Uint8Array(
+                    new Array(albedo.width * albedo.height * 4).fill(0).map((_, i) => [127, 127, 255, 255][i % 4])
+                )
+            };
+        }
+
+        let specularData;
+        try {
+            specularData = Atlas.ensure4Channels(decode(fs.readFileSync(`data/textures/block/${name}_s.png`)));
+        } catch (e) {
+            specularData = {
+                width: albedo.width,
+                height: albedo.height,
+                data: new Uint8Array(
+                    new Array(albedo.width * albedo.height * 4).fill(0).map((_, i) => [0, 10, 0, 255][i % 4])
+                )
+            };
+        }
         const texture: Texture = {
-            albedo,
-            normal: await loadImage(`data/textures/block/${name}_n.png`).catch(() => createPlaceholder(size, [127, 127, 0])),
-            specular: await loadImage(`data/textures/block/${name}_s.png`).catch(() => createPlaceholder(size, [0, 10, 0])),
-            size,
+            albedo: albedo as Image,
+            normal: normalData as Image,
+            specular: specularData as Image,
+            size: albedo.width,
         };
 
 
@@ -114,32 +146,35 @@ export class Atlas {
     }
 
     public generateAtlas() {
-        const canvas = createCanvas(this.width * 2, this.height * 2);
-        const context = canvas.getContext("2d");
-
-        console.log(this.width, this.height);
-
+        const atlas = new Uint8Array(this.width * 2 * this.height * 2 * 4);
 
         for (const [name, location] of this.locations.entries()) {
+            const locX = location.x * MIN_TEXTURE_SIZE;
+            const locY = location.y * MIN_TEXTURE_SIZE;
             const texture = this.textures.get(name)!;
-            context.drawImage(
-                texture.albedo,
-                0, 0, location.size * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE,
-                location.x * MIN_TEXTURE_SIZE, location.y * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE
-            );
-            context.drawImage(
-                texture.normal,
-                0, 0, location.size * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE,
-                location.x * MIN_TEXTURE_SIZE + this.width, location.y * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE
-            );
-            context.drawImage(
-                texture.specular,
-                0, 0, location.size * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE,
-                location.x * MIN_TEXTURE_SIZE, location.y * MIN_TEXTURE_SIZE + this.height, location.size * MIN_TEXTURE_SIZE, location.size * MIN_TEXTURE_SIZE
-            );
+            for (let x = 0; x < location.size * MIN_TEXTURE_SIZE; x++) {
+                for (let y = 0; y < location.size * MIN_TEXTURE_SIZE; y++) {
+                    for (let i = 0; i < 4; i++) {
+                        const albedoIndex = (x + locX + (y + locY) * this.width * 2) * 4 + i;
+                        const normalIndex = (x + locX + this.width + (y + locY) * this.width * 2) * 4 + i;
+                        const specularIndex = (x + locX + (y + locY + this.height) * this.width * 2) * 4 + i;
+
+                        const textureIndex = (x + y * texture.size) * 4 + i;
+                        atlas[albedoIndex] = texture.albedo.data[textureIndex];
+                        atlas[normalIndex] = texture.normal.data[textureIndex];
+                        atlas[specularIndex] = texture.specular.data[textureIndex];
+                    }
+                }
+            }
         }
 
-        return canvas;
+        return encode({
+            width: this.width * 2,
+            height: this.height * 2,
+            data: atlas,
+            channels: 4,
+            depth: 8,
+        });
     }
 
 }

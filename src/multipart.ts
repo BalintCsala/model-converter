@@ -42,17 +42,23 @@ export function convertMultipartToVariant(blockstate: File<Multipart>, models: M
         const cases = (part.when.OR instanceof Array) ? part.when.OR : [part.when as Case];
         cases.forEach(cas => {
             for (let key in cas) {
+                // TODO: Handle AND
+                if (key === "AND")
+                    continue;
+
                 if (!conditions.has(key)) {
                     conditions.set(key, new Set());
                 }
-                const value = cas[key];
-                if (value === "true") {
-                    conditions.get(key)?.add("false");
+
+                for (let value of cas[key].split("|")) {
+                    if (value === "true") {
+                        conditions.get(key)?.add("false");
+                    }
+                    if (!isNaN(parseInt(value))) {
+                        conditions.get(key)?.add("0");
+                    }
+                    conditions.get(key)?.add(value);
                 }
-                if (!isNaN(parseInt(value))) {
-                    conditions.get(key)?.add("0");
-                }
-                conditions.get(key)?.add(value);
             }
         });
     });
@@ -113,6 +119,9 @@ export function convertMultipartToVariant(blockstate: File<Multipart>, models: M
                 usedModels.push(part.apply);
             }
         });
+        
+        if (usedModels.length === 0)
+            return;
         
         const variantKey = caseToVariant(combination);
         if (!generatedReferences.has(key)) {

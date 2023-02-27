@@ -17,10 +17,11 @@ export function applyReferences(blockstate: File<Variants>, models: ModelStorage
 
         let model: Model;
         if (variant instanceof Array) {
-            model = mergeModels(variant.map(reference => applyReferenceRotation(reference, models)));
+            model = applyReferenceRotation(variant[0] as ModelReference, models);
         } else {
-            model = applyReferenceRotation(variants[key] as ModelReference, models);
+            model = applyReferenceRotation(variant as ModelReference, models);
         }
+        
         if ((model.elements?.length ?? 0) === 0) {
             continue;
         }

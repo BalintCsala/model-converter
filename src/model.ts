@@ -1,5 +1,7 @@
+import { encode, ImageData } from "fast-png";
 import { File } from "./file";
 import { Atlas, encodeLocation } from './atlas';
+import { Vector3 } from '@math.gl/core';
 
 export enum Rotation {
     Deg0 = 0,
@@ -36,7 +38,7 @@ export type FaceData = {
     texture: string,
     cullface?: Face,
     rotation?: number,
-    tintindex: string,
+    tintindex?: number,
 };
 
 export type Element = {
@@ -49,7 +51,7 @@ export type Element = {
         rescale?: boolean,
     },
     shade?: boolean,
-    faces: { [key in Face]: FaceData };
+    faces: { [key in Face]?: FaceData };
 };
 
 export type Model = {
@@ -59,21 +61,97 @@ export type Model = {
     elements?: Element[],
 };
 
-export function encodeModel(model: Model, atlas: Atlas) {
+function getRotation(element: Element) {
+    if (!element.rotation)
+        return { axis: new Vector3(1, 0, 0), angle: 2, origin: [8, 8, 8], rescale: false };
+
+    let { origin, axis, angle, rescale } = element.rotation;
+    if (!origin)
+        origin = [8, 8, 8];
+    if (!rescale)
+        rescale = false;
+
+    angle = angle / 22.5 + 2;
+
+    switch (axis) {
+        case RotationAxis.x:
+            return { axis: new Vector3(1, 0, 0), angle, origin, rescale };
+        case RotationAxis.y:
+            return { axis: new Vector3(0, 1, 0), angle, origin, rescale };
+        case RotationAxis.z:
+            return { axis: new Vector3(0, 0, 1), angle, origin, rescale };
+    }
+}
+
+function generateUV(element: Element, face: Face): [number, number, number, number] {
+    switch (face) {
+        case Face.down:
+            return [element.from[0], 16 - element.to[2], element.to[0], 16 - element.from[2]];
+        case Face.up:
+            return [element.from[0], element.from[2], element.to[0], element.to[2]];
+        case Face.north:
+            return [16 - element.to[0], 16 - element.to[1], 16 - element.from[0], 16 - element.from[1]];
+        case Face.south:
+            return [element.from[0], 16 - element.to[1], element.to[0], 16 - element.from[1]];
+        case Face.west:
+            return [element.from[2], 16 - element.to[1], element.to[2], 16 - element.from[1]];
+        case Face.east:
+            return [16 - element.to[2], 16 - element.to[1], 16 - element.from[2], 16 - element.from[1]];
+    }
+}
+
+export function encodeModel(model: Model, atlas: Atlas): number[] {
     if (!model.elements)
         return [0, 0, 0, 0];
 
-    const faceCount = model.elements.reduce((count, element) => count + Object.keys(element.faces).length, 0);
+    const elementCount = model.elements.length;
 
-    return [0, 0, (faceCount >> 8) & 0xFF, faceCount & 0xFF, ...model.elements.map(element => {
-        return Object.keys(element.faces).map(face => {
-            const faceData = element.faces[face as Face];
+    return [elementCount & 0xFF, 0, 0, 0xFF, ...model.elements.map(element => {
+        const res = [];
+        const rotation = getRotation(element);
+        let from = element.from;
+        let to = element.to;
+
+        if (rotation.rescale && element.rotation) {
+            const cosAngle = Math.cos(element.rotation.angle / 180 * Math.PI);
+
+            const fromVec = new Vector3(...from);
+            const toVec = new Vector3(...to);
+
+            const center = new Vector3().copy(fromVec).add(toVec).scale(0.5);
+            const fromRel = new Vector3().copy(fromVec).subtract(center);
+            const toRel = new Vector3().copy(toVec).subtract(center);
+
+            switch (element.rotation.axis) {
+                case RotationAxis.y:
+                    fromRel.x /= cosAngle;
+                    fromRel.z /= cosAngle;
+                    toRel.x /= cosAngle;
+                    toRel.z /= cosAngle;
+                    break;
+            }
+
+            from = [...fromRel.add(center).toArray()] as [number, number, number];
+            to = [...toRel.add(center).toArray()] as [number, number, number];
+        }
+
+        res.push(...from.map(x => Math.round((x + 16) / 48 * 255)), 255);
+        res.push(...to.map(x => Math.round((x + 16) / 48 * 255)), 255);
+        res.push(...rotation.axis.toArray().map(x => x * 255.0), rotation.angle);
+        res.push(...rotation.origin.map(x => Math.round(x / 16.0 * 255)), 255);
+
+        Object.keys(Face).forEach(face => {
+            if (!element.faces[face as Face]) {
+                res.push(0, 0, 0, 0xFF, 0, 0, 0, 0);
+                return;
+            }
+            const faceData = element.faces[face as Face]!;
             const textureLocation = atlas.locations.get(model.textures[faceData.texture.replace(/^#/, "")].replace(/(minecraft:)?(block\/)?/, ""))!;
-            
-            return [
-                ...encodeLocation(textureLocation),
-            ]; 
-        }).flat();
+            res.push(...encodeLocation(textureLocation));
+            res.push(...(element.faces[face as Face]?.uv!).map(x => Math.round(x / 16.0 * 255)));
+        });
+
+        return res;
     }).flat()];
 }
 
@@ -205,13 +283,6 @@ const yRotationFaceMapping = {
     },
 };
 
-const uvRotationMapping = {
-    0: (uv: [number, number, number, number]) => uv,
-    90: (uv: [number, number, number, number]) => [uv[1], 16 - uv[2], uv[3], 16 - uv[0]],
-    180: (uv: [number, number, number, number]) => [16 - uv[2], 16 - uv[3], 16 - uv[0], 16 - uv[1]],
-    270: (uv: [number, number, number, number]) => [16 - uv[3], uv[0], 16 - uv[1], uv[2]],
-};
-
 const xRotationMapping = {
     0: {
         [RotationAxis.x]: RotationAxis.x,
@@ -313,8 +384,6 @@ export function applyReferenceRotation(reference: ModelReference, models: Map<st
     const yRotator = rotateY[reference.y ?? 0];
     const xFaceMapping = xRotationFaceMapping[reference.x ?? 0]!;
     const yFaceMapping = yRotationFaceMapping[reference.y ?? 0]!;
-    const xUVRotator = uvRotationMapping[reference.x ?? 0] as (uv: [number, number, number, number]) => [number, number, number, number];
-    const yUVRotator = uvRotationMapping[reference.y ?? 0] as (uv: [number, number, number, number]) => [number, number, number, number];
     const xRotationAxis = xRotationMapping[reference.x ?? 0] as { [key in RotationAxis]: RotationAxis };
     const yRotationAxis = yRotationMapping[reference.y ?? 0] as { [key in RotationAxis]: RotationAxis };
     const xOriginRotator = xRotateOrigin[reference.x ?? 0] as (origin: [number, number, number]) => [number, number, number];
@@ -325,19 +394,23 @@ export function applyReferenceRotation(reference: ModelReference, models: Map<st
 
         const newFaces: { [key in Face]?: FaceData } = {};
         for (let key in rotated.faces) {
-            const face = rotated.faces[key as Face];
-            newFaces[yFaceMapping[xFaceMapping[key as Face] as Face] as Face] = face;
+            const face = rotated.faces[key as Face]!;
+            if (!face.uv) {
+                face.uv = generateUV(element, key as Face);
+            }
+            const firstRotationFace = xFaceMapping[key as Face] as Face;
+            const secondRotationFace = yFaceMapping[firstRotationFace] as Face;
+            newFaces[secondRotationFace] = face;
 
             if (face.cullface) {
-                face.cullface = yFaceMapping[xFaceMapping[face.cullface] as Face] as Face;
+                face.cullface = secondRotationFace
             }
 
-            if (reference.uvlock && face.uv) {
-                if (key === Face.up || key === Face.down) {
-                    face.uv = yUVRotator(face.uv);
-                } else if (key === Face.east || key === Face.west) {
-                    face.uv = xUVRotator(face.uv);
-                }
+            if (firstRotationFace === Face.east || firstRotationFace === Face.west) {
+                face.rotation = ((face.rotation ?? 0) + (reference.x ?? 0)) % 360;
+            }
+            if (secondRotationFace === Face.up || secondRotationFace === Face.down) {
+                face.rotation = ((face.rotation ?? 0) + (reference.y ?? 0)) % 360;
             }
         }
         rotated.faces = newFaces as { [key in Face]: FaceData };
@@ -352,7 +425,9 @@ export function applyReferenceRotation(reference: ModelReference, models: Map<st
                 rotated.rotation.angle *= -1;
             }
 
-            if (reference.y === 90 || reference.y === 180) {
+            if (rotated.rotation.axis === RotationAxis.z && (reference.y === 180 || reference.y === 270)) {
+                rotated.rotation.angle *= -1;
+            } if (rotated.rotation.axis === RotationAxis.x && (reference.y === 90 || reference.y === 180)) {
                 rotated.rotation.angle *= -1;
             }
         }
@@ -383,9 +458,9 @@ function renameTextures(model: Model, suffix: string) {
 
     result.elements = result.elements.map(element => {
         for (let key in element.faces) {
-            const texture = element.faces[key as Face].texture;
+            const texture = element.faces[key as Face]!.texture;
             if (texture.startsWith("#") && !texture.endsWith("__")) {
-                element.faces[key as Face].texture += suffix;
+                element.faces[key as Face]!.texture += suffix;
             }
         }
 
@@ -428,8 +503,46 @@ export function simplifyModel(model: Model) {
 
     model.elements?.forEach(element => {
         for (let key in element.faces) {
-            const face = element.faces[key as Face];
+            const face = element.faces[key as Face]!;
             face.texture = "#" + mapping.get(face.texture.replace("#", ""))!;
         }
     });
+}
+
+export function disableShading(model: Model) {
+    model.ambientocclusion = false;
+    if (!model.elements)
+        return;
+    model.elements.forEach(element => {
+        element.shade = false;
+    });
+}
+
+export function createDataTexture(index: number) {
+    const data = new Uint8Array(16 * 16 * 4);
+    for (let x = 0; x < 16; x++) {
+        for (let y = 0; y < 16; y++) {
+            if (x < 8) {
+                data[(x + y * 16) * 4 + 0] = 0xFF;
+                data[(x + y * 16) * 4 + 1] = 0;
+                data[(x + y * 16) * 4 + 2] = 0xFF;
+                data[(x + y * 16) * 4 + 3] = 0xFF;
+            } else {
+                data[(x + y * 16) * 4 + 0] = index & 0xFF;
+                data[(x + y * 16) * 4 + 1] = (index >> 8) & 0xFF;
+                data[(x + y * 16) * 4 + 2] = (index >> 16) & 0xFF;
+                data[(x + y * 16) * 4 + 3] = 0xFF;
+            }
+        }
+    }
+
+    const png: ImageData = {
+        width: 16,
+        height: 16,
+        data: data,
+        channels: 4,
+        depth: 8,
+    };
+
+    return encode(png);
 }

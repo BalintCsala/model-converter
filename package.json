@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@math.gl/core": "^3.6.3",
     "@types/node": "^18.13.0",
     "canvas": "^2.11.0",
     "fast-png": "^6.1.0",
@@ -7,6 +8,8 @@
   },
   "scripts": {
     "prestart": "npx tsc",
-    "start": "node --enable-source-maps build/main.js"
+    "start": "node --enable-source-maps build/main.js",
+    "pretest": "npx tsc",
+    "test": "node --enable-source-maps build/test.js"
   }
 }
